@@ -101,6 +101,7 @@ type Runtime struct {
 
 	typeInfoCache   map[reflect.Type]*reflectTypeInfo
 	fieldNameMapper FieldNameMapper
+	simpleMapTypes  map[reflect.Type]func(interface{}) map[string]interface{}
 
 	vm *vm
 }
@@ -1032,6 +1033,20 @@ func (r *Runtime) ToValue(i interface{}) Value {
 		return _null
 	}
 
+	if convert, isSimpleMapType := r.simpleMapTypes[value.Type()]; isSimpleMapType {
+		obj := &Object{runtime: r}
+		m := &objectGoMapSimple{
+			baseObject: baseObject{
+				val:        obj,
+				extensible: true,
+			},
+			data: convert(i),
+		}
+		obj.self = m
+		m.init()
+		return obj
+	}
+
 	switch value.Kind() {
 	case reflect.Map:
 		if value.Type().NumMethod() == 0 {
@@ -1389,6 +1404,13 @@ func (r *Runtime) Get(name string) Value {
 // SetRandSource sets random source for this Runtime. If not called, the default math/rand is used.
 func (r *Runtime) SetRandSource(source RandSource) {
 	r.rand = source
+}
+
+func (r *Runtime) RegisterSimpleMapType(t reflect.Type, convert func(interface{}) map[string]interface{}) {
+	if r.simpleMapTypes == nil {
+		r.simpleMapTypes = map[reflect.Type]func(interface{}) map[string]interface{}{}
+	}
+	r.simpleMapTypes[t] = convert
 }
 
 // Callable represents a JavaScript function that can be called from Go.
