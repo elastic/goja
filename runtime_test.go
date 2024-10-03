@@ -3004,6 +3004,29 @@ func TestToNumber(t *testing.T) {
 	testScriptWithTestLib(SCRIPT, _undefined, t)
 }
 
+type mapStr map[string]interface{}
+
+func TestRuntimeRegisterSimpleMapType(t *testing.T) {
+	rt := New()
+	// Register converter.
+	rt.RegisterSimpleMapType(reflect.TypeOf(mapStr(nil)), func(i interface{}) map[string]interface{} {
+		return map[string]interface{}(i.(mapStr))
+	})
+	rt.Set("m", mapStr{
+		"event": mapStr{
+			"type": "alert",
+		},
+	})
+	_, err := rt.RunString(`
+		if (m.event.type != "alert") {
+			throw "failed";
+		}
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 /*
 func TestArrayConcatSparse(t *testing.T) {
 function foo(a,b,c)

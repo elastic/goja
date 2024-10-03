@@ -192,6 +192,7 @@ type Runtime struct {
 	methodsInfoCache map[reflect.Type]*reflectMethodsInfo
 
 	fieldNameMapper FieldNameMapper
+	simpleMapTypes  map[reflect.Type]func(interface{}) map[string]interface{}
 
 	vm    *vm
 	hash  *maphash.Hash
@@ -1899,6 +1900,20 @@ func (r *Runtime) toValue(i interface{}, origValue reflect.Value) Value {
 		return _null
 	}
 
+	if convert, isSimpleMapType := r.simpleMapTypes[value.Type()]; isSimpleMapType {
+		obj := &Object{runtime: r}
+		m := &objectGoMapSimple{
+			baseObject: baseObject{
+				val:        obj,
+				extensible: true,
+			},
+			data: convert(i),
+		}
+		obj.self = m
+		m.init()
+		return obj
+	}
+
 	switch value.Kind() {
 	case reflect.Map:
 		if value.Type().NumMethod() == 0 {
@@ -2431,6 +2446,13 @@ func (r *Runtime) SetParserOptions(opts ...parser.Option) {
 // from the vm goroutine or when the vm is not running.
 func (r *Runtime) SetMaxCallStackSize(size int) {
 	r.vm.maxCallStackSize = size
+}
+
+func (r *Runtime) RegisterSimpleMapType(t reflect.Type, convert func(interface{}) map[string]interface{}) {
+	if r.simpleMapTypes == nil {
+		r.simpleMapTypes = map[reflect.Type]func(interface{}) map[string]interface{}{}
+	}
+	r.simpleMapTypes[t] = convert
 }
 
 // New is an equivalent of the 'new' operator allowing to call it directly from Go.
