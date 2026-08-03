@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -1087,6 +1088,72 @@ func TestRuntime_ExportToObject(t *testing.T) {
 	}
 }
 
+func TestRuntime_SetGlobalObject(t *testing.T) {
+	vm := New()
+
+	_, err := vm.RunString(`var myVar = 123;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldGlobalObject := vm.GlobalObject()
+
+	newGlobalObject, err := vm.RunString(`({oldGlobalReference:globalThis});`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vm.SetGlobalObject(newGlobalObject.(*Object))
+
+	if vm.GlobalObject() != newGlobalObject {
+		t.Fatal("Expected global object to be new object")
+	}
+
+	if vm.GlobalObject().Get("myVar") != nil {
+		t.Fatal("Expected myVar to be undefined")
+	}
+
+	oldGlobalReference := vm.GlobalObject().Get("oldGlobalReference")
+	if oldGlobalReference == nil {
+		t.Fatal("Expected oldGlobalReference to be defined")
+	}
+
+	if oldGlobalReference != oldGlobalObject {
+		t.Fatal("Expected reference to be to old global object")
+	}
+}
+
+func TestRuntime_SetGlobalObject_Proxy(t *testing.T) {
+	vm := New()
+
+	globalObject := vm.GlobalObject()
+
+	globalObjectProxy := vm.NewProxy(globalObject, &ProxyTrapConfig{
+		Get: func(target *Object, property string, receiver Value) (value Value) {
+			if target != globalObject {
+				t.Fatal("Expected target to be global object")
+			}
+
+			if property != "testing" {
+				t.Fatal("Expected property to be 'testing'")
+			}
+
+			return valueTrue
+		},
+	})
+
+	vm.SetGlobalObject(vm.ToValue(globalObjectProxy).(*Object))
+
+	ret, err := vm.RunString("testing")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ret != valueTrue {
+		t.Fatal("Expected return value to equal true")
+	}
+}
+
 func ExampleAssertFunction() {
 	vm := New()
 	_, err := vm.RunString(`
@@ -1787,6 +1854,43 @@ func TestInterruptInWrappedFunctionExpectStackOverflowError(t *testing.T) {
 		t.Fatal("expected error but got no error")
 	}
 	var soErr *StackOverflowError
+	if !errors.As(err, &soErr) {
+		t.Fatalf("Wrong error type: %T", err)
+	}
+}
+
+func TestInterruptWithPromises(t *testing.T) {
+	rt := New()
+	rt.SetMaxCallStackSize(5)
+	// this test panics as otherwise goja will recover and possibly loop
+	rt.Set("abort", rt.ToValue(func() {
+		// panic("waty")
+		rt.Interrupt("abort this")
+	}))
+	var queue = make(chan func() error, 10)
+	rt.Set("myPromise", func() Value {
+		p, resolve, _ := rt.NewPromise()
+		queue <- func() error {
+			return resolve("some value")
+		}
+
+		return rt.ToValue(p)
+	})
+
+	_, err := rt.RunString(`
+		let p = myPromise()
+		p.then(() => { abort() });
+	`)
+	if err != nil {
+		t.Fatal("expected noerror but got error")
+	}
+	f := <-queue
+	err = f()
+	if err == nil {
+		t.Fatal("expected error but got no error")
+	}
+	t.Log(err)
+	var soErr *InterruptedError
 	if !errors.As(err, &soErr) {
 		t.Fatalf("Wrong error type: %T", err)
 	}
@@ -2742,6 +2846,9 @@ func TestErrorFormatSymbols(t *testing.T) {
 	vm := New()
 	vm.Set("a", func() (Value, error) { return nil, errors.New("something %s %f") })
 	_, err := vm.RunString("a()")
+	if err == nil {
+		t.Fatal("expected error")
+	}
 	if !strings.Contains(err.Error(), "something %s %f") {
 		t.Fatalf("Wrong value %q", err.Error())
 	}
@@ -3025,6 +3132,12 @@ func TestRuntimeRegisterSimpleMapType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestToValueNilBigInt(t *testing.T) {
+	vm := New()
+	vm.Set("n", (*big.Int)(nil))
+	vm.testScript(`n === 0n`, valueTrue, t)
 }
 
 /*
